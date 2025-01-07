@@ -13,11 +13,9 @@ fn main() -> Result<()> {
 
     let json = parse_json(&mut reader)?;
 
-    let field = json.map.get("floater").unwrap_or(&JSONField::Empty);
+    let field = json.map.get("inter").unwrap_or(&JSONField::Empty);
 
     println!("{}",field);
-
-
 
     Ok(())
 }

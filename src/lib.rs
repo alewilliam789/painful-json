@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::{default, env, i32};
+use std::{env, i32};
 use std::fs::{self, File};
 use std::io::{self, BufReader, Read};
 use std::fmt;
@@ -91,8 +91,6 @@ impl std::fmt::Display for JSONField {
 
 
 pub fn get_reader() -> Result<BufReader<File>> {
-
-    let path = env::current_dir()?;
     
     let args : Vec<String> = env::args().collect();
 
@@ -219,7 +217,40 @@ fn parse_character(current_char : char, json_pair : &mut JSONPair, json : &mut J
             }    
         }
         ',' => {
+            json_pair.value = match json_pair.value {
+                JSONField::Num(mut num) => {
+                    num.value = match num.value {
+                        Num::Int(int)=>{
+                            if num.is_negative {
+                                Num::Int(int*-1)
+                            }
+                            else {
+                                Num::Int(int)
+                            }
+                        }
+                        Num::Flt(flt) => {
+                            if num.is_negative {
+                                Num::Flt(flt*-1.0)
+                            }
+                            else {
+                                Num::Flt(flt)
+                            }
+                        }
+                        _ => {
+                            num.value
+                        }
+                    };
+
+                    JSONField::Num(num)
+                }
+                _=>{
+                    mem::take(&mut json_pair.value)
+                }
+            };
+
             json.map.insert(mem::replace(&mut json_pair.key, String::new()), mem::replace(&mut json_pair.value, JSONField::Empty));
+            
+            json_pair.current_value = false;
         }
         '.' => {
             if json_pair.current_value {
@@ -277,7 +308,8 @@ fn create_value(current_char : char, json_pair : &mut JSONPair) -> Result<()> {
 
         json_pair.value = match current_char {
             '-' => {
-                let mut int = Number {
+
+                let int = Number {
                     value : Num::Int(0),
                     is_negative : true,
                     digit: 0,
@@ -322,23 +354,32 @@ fn fill_value(current_char : char, json_pair : &mut JSONPair) -> Result<()> {
                     
                    let base : i32 = 10;
                    
-                   if current_char.is_ascii_whitespace() {
+                   if !current_char.is_numeric() {
+                        if num.is_negative {    
+                            num.value = match num.value  {
+                                Num::Int(int) =>{
+                                    print!("{}",int);
+                                    Num::Int(int*-1)
+                                }
+                                Num::Flt(flt) => {
+                                    Num::Flt(flt*-1.0)
+                                }
+                                _ => {
+                                    num.value
+                                }
+                            }
+                        }
+
+                        json_pair.value = JSONField::Num(mem::take(num));
+
                         return Ok(());
                    }
 
                    match num.value {
 
                         Num::Uint(uint) => {
-
-                            if num.digit == 0 {
-
-                                num.value = Num::Uint(uint+current_char.to_digit(10).expect("This  should be a number"));
-                                num.digit += 1;
-                            }
-                            else {
-                                num.value = Num::Uint(uint*(base.pow(num.digit)as u32)  + current_char.to_digit(10).expect("This should be a number"));
-                                num.digit += 1;
-                            }
+                            num.value = Num::Uint(uint*(base.pow(num.digit)as u32)  + current_char.to_digit(10).expect("This should be a number"));
+                            num.digit += 1;
                         }
                         Num::Int(int) => {
                             if num.digit == 0 {
@@ -511,10 +552,6 @@ mod tests {
     #[test]
     fn bool_json() -> Result<()> {
         let file_path = "./json/bool.json";
-
-        let path = env::current_dir()?;
-
-        println!("The path is {}", path.display());
  
         let mut reader = passed_file(file_path)?;
 
@@ -611,7 +648,7 @@ mod tests {
 
         match value {
             Num::Flt(flt) => {
-                assert!(flt == 22.1);
+                assert!(flt == -22.1);
             }
             _ => {
                 assert!(false)
