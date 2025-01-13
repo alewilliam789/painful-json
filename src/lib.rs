@@ -55,6 +55,7 @@ pub struct JSONPair {
     value: JSONField,
     current_key : bool, 
     current_value : bool,
+    is_escaped: bool
 }
 
 impl std::fmt::Display for JSONField {
@@ -152,6 +153,7 @@ pub fn parse_json<'a>(reader : &'a mut BufReader<File>) -> Result<JSON> {
             value : JSONField::Empty,
             current_key : false,
             current_value : false,
+            is_escaped : false,
     };
 
     let mut curr_u8 : [u8;1] = [65u8];
@@ -169,12 +171,8 @@ pub fn parse_json<'a>(reader : &'a mut BufReader<File>) -> Result<JSON> {
         parse_character(char, &mut json_pair, &mut json)?;
     }
 
-    match json_pair.value {
-        JSONField::Empty => (),
-        _ => {
-            json.map.insert(json_pair.key, json_pair.value);
-        }
-    };
+
+    json.map.insert(json_pair.key, json_pair.value);
 
     
     if !json.is_json && json.map.is_empty() {
@@ -198,6 +196,8 @@ fn parse_character(current_char : char, json_pair : &mut JSONPair, json : &mut J
             if json.current_object {
                 json.current_object = false;
                 json.is_json = true;
+
+                
             }
             else {
                 return Err(anyhow!("No JSON object to close")) 
@@ -205,10 +205,10 @@ fn parse_character(current_char : char, json_pair : &mut JSONPair, json : &mut J
         }
         '"' => {
             if json_pair.current_value {
-                checkset_string(json_pair);
+                checkset_string(json_pair, current_char)?;
             }
             else {
-                check_key(json_pair);
+                check_key(json_pair)?;
             }
         }
         ':' => {
@@ -217,6 +217,7 @@ fn parse_character(current_char : char, json_pair : &mut JSONPair, json : &mut J
             }    
         }
         ',' => {
+
             json_pair.value = match json_pair.value {
                 JSONField::Num(mut num) => {
                     num.value = match num.value {
@@ -347,8 +348,10 @@ fn fill_value(current_char : char, json_pair : &mut JSONPair) -> Result<()> {
     
     match current_value {
                JSONField::Str(str) => {
-                    str.push(current_char);
-                    json_pair.value = JSONField::Str(mem::take(str));
+
+                    let (new_string, is_escaped) = append_character(current_char, str,json_pair.is_escaped)?;
+                    json_pair.is_escaped = is_escaped;
+                    json_pair.value = JSONField::Str(new_string);
                 }
                JSONField::Num(num) => {
                     
@@ -414,7 +417,7 @@ fn fill_value(current_char : char, json_pair : &mut JSONPair) -> Result<()> {
     Ok(())
 }
 
-fn check_key(json_pair : &mut JSONPair) {
+fn check_key(json_pair : &mut JSONPair) -> Result<()>{
     
     if json_pair.current_key {
         json_pair.current_key = false;
@@ -422,24 +425,39 @@ fn check_key(json_pair : &mut JSONPair) {
     else {
         json_pair.current_key = true;
     }
+
+    Ok(())
 }
 
-fn checkset_string (json_pair : &mut JSONPair) {
+fn checkset_string (json_pair : &mut JSONPair, current_char : char) -> Result<()>{
 
     let current_value = &json_pair.value;
 
-    match current_value {
-        JSONField::Empty => {
-           json_pair.value = JSONField::Str(String::new());
-
-        }
+    json_pair.value = match current_value {
         JSONField::Str(str) => {
-            if str.len() > 0 {
-                json_pair.current_value = false;
+
+            if json_pair.is_escaped {
+                let (new_string, is_escaped) = append_character(current_char, str,json_pair.is_escaped)?;
+
+                json_pair.is_escaped = is_escaped;
+
+                JSONField::Str(new_string)
             }
+            else {
+                if str.len() > 0 {
+                    json_pair.current_value = false;
+                }
+
+                JSONField::Str(str.to_string())
+            }
+            
         }
-        _ => ()
+        _ => {
+            JSONField::Str(String::new())
+        }
     };
+
+    Ok(())
 }
 
 fn make_flt(json_pair : &mut JSONPair) -> Result<()> {
@@ -473,19 +491,57 @@ fn make_flt(json_pair : &mut JSONPair) -> Result<()> {
     Ok(())
 }
 
+fn append_character(current_char : char, stringer : &String, mut is_escaped : bool) -> Result<(String,bool)>{
+
+    let mut new_string = stringer.to_string();
+
+    if current_char.is_alphanumeric() && !is_escaped {
+        new_string.push(current_char);
+    }
+    else if current_char == '\\' && !is_escaped {
+        is_escaped = true;
+    }
+    else {
+        match current_char {
+            '\\' => {
+                new_string.push('\\');
+            }
+            '"' => {
+                new_string.push('"');
+            }
+            'n' => {
+                new_string.push('\n');
+            }
+            't' => {
+                new_string.push('\t');
+            }
+            'r' => {
+                new_string.push('\r');
+            }
+            _=> {
+                new_string.push(current_char);
+            }
+        }
+
+        is_escaped = false;
+    }
+    
+    return Ok((new_string,is_escaped))
 
 
-fn passed_file(file_path : &str) -> Result<BufReader<File>>{
-    
-    let reader = read_file(file_path)?;
-    
-    Ok(reader)
 }
 
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn passed_file(file_path : &str) -> Result<BufReader<File>>{
+    
+        let reader = read_file(file_path)?;
+        
+        Ok(reader)
+    }
 
     #[test]
     fn correct_file_path() -> () {
@@ -526,6 +582,7 @@ mod tests {
             value : JSONField::Empty,
             current_key : false,
             current_value : false,
+            is_escaped : false,
         };
 
         for char in fake_file.chars() {
@@ -654,6 +711,72 @@ mod tests {
                 assert!(false)
             }
         };
+
+        Ok(())
+    }
+
+    #[test]
+    fn string_json() -> Result<()> {
+        let file_path: &str = "./json/string.json";
+
+        let mut reader: BufReader<File> = passed_file(file_path)?;
+
+        let json: JSON = parse_json(&mut reader)?;
+
+        let field: &JSONField = json.map.get("stringer").unwrap_or( &JSONField::Empty);
+
+        let value : String = match field {
+            JSONField::Str(str)=>{
+                str.to_string()
+            }
+            _ => {String::from("")}
+        };
+
+        assert!(value == "hello");
+
+        Ok(())
+    }
+
+    #[test]
+    fn escaped_quote_json() -> Result<()> {
+        let file_path: &str = "./json/escaped_string.json";
+
+        let mut reader: BufReader<File> = passed_file(file_path)?;
+
+        let json: JSON = parse_json(&mut reader)?;
+
+        let field: &JSONField = json.map.get("stringer").unwrap_or( &JSONField::Empty);
+
+        let value : String = match field {
+            JSONField::Str(str)=>{
+                str.to_string()
+            }
+            _ => {String::from("")}
+        };
+
+        assert!(value == "hello\"");
+
+        Ok(())
+    }
+
+    #[test]
+    fn escaped_slash_json() -> Result<()> {
+        let file_path: &str = "./json/escaped_string.json";
+
+        let mut reader: BufReader<File> = passed_file(file_path)?;
+
+        let json: JSON = parse_json(&mut reader)?;
+
+        let field: &JSONField = json.map.get("slasher").unwrap_or( &JSONField::Empty);
+
+        let value : String = match field {
+            JSONField::Str(str)=>{
+                str.to_string()
+            }
+            _ => {String::from("")}
+        };
+
+        assert!(value == "hello\\");
 
         Ok(())
     }
